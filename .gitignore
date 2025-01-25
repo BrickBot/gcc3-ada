@@ -6,6 +6,7 @@
 *-src
 *-stamp-*
 *-tagged
+build/
 blockit
 cfg-paper.info
 config.status
