@@ -1,0 +1,99 @@
+name: GCC 3.4.6 GNAT Ada Compiler CI
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+env:
+  BUILD_DEPENDS: make binutils gcc gcc-multilib g++ gnat bison flex libtool gawk gettext texinfo file libisl-dev dejagnu
+  
+  # If these older source package releases will not build without disabling Fortify and/or run without buffer overflow errors,
+  #    then "make CPPFLAGS=-U_FORTIFY_SOURCE" might be necessary
+  #    Passing that to this older configure might not work, as should otherwise seem doable per
+  #    the link https://www.gnu.org/software/automake/manual/html_node/Flag-Variables-Ordering.html
+  CROSS_TARGET: --target=h8300-hitachi-coff
+  COMMON_PATH_ARGS: --prefix=/usr/local/brickbot
+  COMMON_GCC_CONFIG_ARGS: --with-gcc --with-gnu-as --with-gnu-ld --with-newlib --disable-libssp --disable-multilib --enable-target-optspace
+
+  BUILD_DIR_GCC: build/gcc-ada
+  SYSROOT_DIR:   sysroot
+  
+  GCC_INSTALL_NAME: h8300-coff-gcc_install
+  TOOLCHAIN_INSTALL_NAME: h8300-coff-toolchain_install
+
+jobs:
+  build_cross_gcc_job:
+    name:     Build cross-compiler for the H8/300
+    runs-on:  ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+    
+    steps:
+    - name: Get latest from version control
+      uses: actions/checkout@v4
+      #with:
+        # git-restore-mtime-bare uses the ref log to find the correct timestamp
+        # for each file. This requires a full git history. The default value (1)
+        # creates a shallow checkout.
+        #fetch-depth: 0
+
+      # Fix timestamps (needed to prevent gcc/c-parse.c from sometimes being regenerated during build)
+    - name: Restore source timestamps
+      uses: chetan/git-restore-mtime-action@v2
+
+    - name: Update build environment
+      run:  sudo apt-get --assume-yes update
+
+    - name: Install build dependencies
+      run:  sudo apt-get --assume-yes install $BUILD_DEPENDS
+
+    - name: Setup the build directory for an H8/300 cross-toolchain
+      run:  mkdir -p $BUILD_DIR_GCC
+
+
+    # Run the GCC build steps
+    - name: Configure the build for a GCC H8/300 cross-compiler
+      run:  |
+        cd $BUILD_DIR_GCC
+        echo "Current working directory: $PWD"
+        ../../configure  --enable-languages=ada  $CROSS_TARGET  $COMMON_GCC_CONFIG_ARGS  $COMMON_PATH_ARGS
+
+    - name: Execute the build for a GCC H8/300 cross-compiler
+      run:  |
+        cd $BUILD_DIR_GCC
+        echo "Current working directory: $PWD"
+        make
+
+    - name: Test install the built GCC H8/300 cross-compiler
+      run:  |
+        cd $BUILD_DIR_GCC
+        echo "Current working directory: $PWD"
+        sudo make DESTDIR=$GITHUB_WORKSPACE/$SYSROOT_DIR install
+
+    # Before archiving, tar the host installation output to preserve file permission
+    # c.f. https://github.com/actions/upload-artifact?tab=readme-ov-file#permission-loss
+    # To avoid including a "." or other unwanted directory, c.f. https://stackoverflow.com/a/39530409
+    - name: Tar the host installation snapshot to preserve file permissions
+      run:  find $SYSROOT_DIR -printf "%P\n" | sort | tar --verbose --create --file build/${{ env.GCC_INSTALL_NAME }}.tar --no-recursion --directory=$SYSROOT_DIR --files-from=-
+
+    - name: Archive the host installation snapshot tar file
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.GCC_INSTALL_NAME }}_[runner~${{ matrix.os }}]_run${{ github.run_id }}.${{ github.run_number }}.${{ github.run_attempt }}
+        path: build/${{ env.GCC_INSTALL_NAME }}.tar
+
+    - name: Install the built GCC H8/300 cross-compiler
+      run:  |
+        cd $BUILD_DIR_GCC
+        echo "Current working directory: $PWD"
+        sudo make install
+
+    - name: Check always if any version-controlled files were modified
+      if:   always()
+      run:  git status
+
+    - name: Show always any diffs of version-controlled files
+      if:   always()
+      run:  git diff
